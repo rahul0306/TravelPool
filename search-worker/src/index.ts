@@ -13,7 +13,6 @@ export interface Env {
 const DAILY_LIMIT = 100;
 const MONTHLY_LIMIT = 2000;
 
-// ---------- Response helpers ----------
 function json(data: unknown, status = 200) {
 	return new Response(JSON.stringify(data), {
 		status,
@@ -22,10 +21,10 @@ function json(data: unknown, status = 200) {
 }
 
 function ymd(d = new Date()) {
-	return d.toISOString().slice(0, 10); // YYYY-MM-DD
+	return d.toISOString().slice(0, 10); 
 }
 function ym(d = new Date()) {
-	return d.toISOString().slice(0, 7); // YYYY-MM
+	return d.toISOString().slice(0, 7); 
 }
 
 function badRequest(message: string) {
@@ -36,7 +35,6 @@ function unauthorized() {
 	return json({ error: "Forbidden" }, 403);
 }
 
-// ---------- Security ----------
 function requireAppSecret(req: Request, env: Env) {
 	const given = (req.headers.get("x-app-secret") || "").trim();
 	const expected = (env.APP_SHARED_SECRET || "").trim();
@@ -64,9 +62,6 @@ async function requireFirebaseAuth(req: Request, env: Env): Promise<FirebaseAuth
 	const projectId = (env.FIREBASE_PROJECT_ID || "").trim();
 	if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
 
-	// Firebase requires:
-	// aud == projectId, iss == "https://securetoken.google.com/<projectId>", sub non-empty
-	// and signature verified using Google keys (kid). :contentReference[oaicite:2]{index=2}
 	const { payload } = await jwtVerify(token, FIREBASE_JWKS, {
 		audience: projectId,
 		issuer: `https://securetoken.google.com/${projectId}`,
@@ -79,7 +74,6 @@ async function requireFirebaseAuth(req: Request, env: Env): Promise<FirebaseAuth
 }
 
 
-// ---------- Rate limiting ----------
 async function enforceLimits(env: Env, userKey: string) {
 	const dayKey = `rl:day:${userKey}:${ymd()}`;
 	const monthKey = `rl:month:${userKey}:${ym()}`;
@@ -97,16 +91,14 @@ async function enforceLimits(env: Env, userKey: string) {
 	}
 
 	await Promise.all([
-		env.SEARCH_KV.put(dayKey, String(dayCount), { expirationTtl: 60 * 60 * 24 * 2 }), // ~2 days
-		env.SEARCH_KV.put(monthKey, String(monthCount), { expirationTtl: 60 * 60 * 24 * 40 }), // ~40 days
+		env.SEARCH_KV.put(dayKey, String(dayCount), { expirationTtl: 60 * 60 * 24 * 2 }), 
+		env.SEARCH_KV.put(monthKey, String(monthCount), { expirationTtl: 60 * 60 * 24 * 40 }), 
 	]);
 
 	return { ok: true, dayCount, monthCount };
 }
 
-// ---------- Stable cache keys ----------
 function stableStringify(obj: any): string {
-	// Deterministic JSON stringify by sorting object keys recursively
 	if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
 	if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
 	const keys = Object.keys(obj).sort();
@@ -115,14 +107,11 @@ function stableStringify(obj: any): string {
 
 function cacheKey(prefix: string, parts: any) {
 	const s = stableStringify(parts);
-	// Avoid huge KV keys by hashing-ish shortening (cheap)
-	// (Not cryptographic—just to keep key size sane)
 	let h = 0;
 	for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
 	return `${prefix}:${h.toString(16)}`;
 }
 
-// ---------- Amadeus OAuth + request helpers ----------
 const AMADEUS_TEST_BASE = "https://test.api.amadeus.com";
 
 function amadeusBase(env: Env) {
@@ -153,7 +142,7 @@ async function fetchAmadeusToken(env: Env): Promise<string> {
 	}
 
 	const tok = (await resp.json()) as AmadeusTokenResponse;
-	const ttl = Math.max(60, (tok.expires_in ?? 1800) - 60); // safety buffer
+	const ttl = Math.max(60, (tok.expires_in ?? 1800) - 60); 
 	await env.SEARCH_KV.put("amadeus:token", tok.access_token, { expirationTtl: ttl });
 	return tok.access_token;
 }
@@ -175,11 +164,9 @@ async function amadeusGet(
 		return url.toString();
 	};
 
-	// First try with cached token
 	let token = await getAmadeusToken(env);
 	let resp = await fetch(makeUrl(), { headers: { Authorization: `Bearer ${token}` } });
 
-	// Refresh once on 401
 	if (resp.status === 401) {
 		await env.SEARCH_KV.delete("amadeus:token");
 		token = await fetchAmadeusToken(env);
@@ -198,7 +185,6 @@ async function amadeusGet(
 	return resp.json();
 }
 
-// ---------- Types returned to the Android app ----------
 type AirportSuggestion = {
 	iataCode: string;
 	name: string;
@@ -207,12 +193,12 @@ type AirportSuggestion = {
 };
 
 type HotelSuggestion = {
-	hotelId: string; // keep name aligned with Android model
+	hotelId: string; 
 	name: string;
 	cityName: string;
 	countryName: string;
 	address?: string;
-	placeId?: string; // we store CITY CODE here for /search/hotels
+	placeId?: string; 
 };
 
 type FlightOfferUi = {
@@ -230,7 +216,6 @@ type HotelOfferUi = {
 	deepLink?: string | null;
 };
 
-// ---------- Provider implementations (Amadeus) ----------
 async function autocompleteAirportsProvider(q: string, env: Env): Promise<AirportSuggestion[]> {
 	const data = await amadeusGet(env, "/v1/reference-data/locations", {
 		keyword: q,
@@ -248,13 +233,12 @@ async function autocompleteAirportsProvider(q: string, env: Env): Promise<Airpor
 	}));
 }
 
-// For hotels we recommend city autocomplete. The app label "Hotel / city" still works well.
 async function autocompleteHotelsProvider(q: string, env: Env): Promise<HotelSuggestion[]> {
 	const data = await amadeusGet(env, "/v1/reference-data/locations", {
 		keyword: q,
 		subType: "CITY",
 		"page[limit]": "8",
-		view: "FULL", // ✅ important so geoCode is present more often
+		view: "FULL", 
 		sort: "analytics.travelers.score",
 	});
 
@@ -267,7 +251,6 @@ async function autocompleteHotelsProvider(q: string, env: Env): Promise<HotelSug
 			const lat = x.geoCode?.latitude;
 			const lon = x.geoCode?.longitude;
 
-			// ✅ if no geo, return null (we'll filter it out)
 			if (lat == null || lon == null) return null;
 
 			return {
@@ -275,7 +258,7 @@ async function autocompleteHotelsProvider(q: string, env: Env): Promise<HotelSug
 				name: cityCode ? `${cityName} (${cityCode})` : cityName,
 				cityName,
 				countryName: country,
-				placeId: `${lat},${lon}`, // ✅ never empty now
+				placeId: `${lat},${lon}`, 
 			};
 		})
 		.filter(Boolean);
@@ -305,7 +288,7 @@ async function searchFlightsProvider(body: Record<string, unknown>, env: Env): P
 		const price = o?.price?.grandTotal;
 		const cur = o?.price?.currency;
 
-		// best-effort summary
+		
 		const seg0 = o?.itineraries?.[0]?.segments?.[0];
 		const dep = seg0?.departure?.iataCode ?? origin;
 		const arr = seg0?.arrival?.iataCode ?? destination;
@@ -323,7 +306,7 @@ async function searchFlightsProvider(body: Record<string, unknown>, env: Env): P
 }
 
 async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Promise<HotelOfferUi[]> {
-	const placeId = String(body.placeId || "").trim(); // "lat,lon"
+	const placeId = String(body.placeId || "").trim(); 
 	const checkIn = String(body.checkIn || "").trim();
 	const checkOut = String(body.checkOut || "").trim();
 	const rooms = String(body.rooms || "1").trim();
@@ -333,7 +316,6 @@ async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Pr
 	const longitude = (lonStr || "").trim();
 	if (!latitude || !longitude) return [];
 
-	// Step A: list hotels near geocode (fast)
 	const list = await amadeusGet(env, "/v1/reference-data/locations/hotels/by-geocode", {
 		latitude,
 		longitude,
@@ -348,7 +330,6 @@ async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Pr
 
 	if (hotelIds.length === 0) return [];
 
-	// Helper to map offers -> UI
 	const toUi = (offers: any): HotelOfferUi[] => {
 		return (offers?.data ?? []).map((item: any) => {
 			const hotel = item?.hotel ?? {};
@@ -375,9 +356,8 @@ async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Pr
 		});
 	};
 
-	// Step B: batch hotelIds in groups of 3 (max) and stop early
 	const start = Date.now();
-	const TIME_BUDGET_MS = 6500;     // keep under typical mobile timeouts
+	const TIME_BUDGET_MS = 6500;     
 	const TARGET_RESULTS = 8;
 
 	const results: HotelOfferUi[] = [];
@@ -395,7 +375,7 @@ async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Pr
 
 		try {
 			const offers = await amadeusGet(env, "/v3/shopping/hotel-offers", {
-				hotelIds: batch.join(","),     // ✅ batch of 3
+				hotelIds: batch.join(","),     
 				checkInDate: checkIn,
 				checkOutDate: checkOut,
 				roomQuantity: rooms,
@@ -409,7 +389,6 @@ async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Pr
 				if (results.length >= TARGET_RESULTS) break;
 			}
 		} catch (e: any) {
-			// 429: back off a bit; 400: skip this batch
 			const status = e?.status;
 			if (status === 429) {
 				console.log("hotel-offers 429; backing off briefly");
@@ -425,25 +404,22 @@ async function searchHotelsProvider(body: Record<string, unknown>, env: Env): Pr
 
 
 
-// ---------- Main handler ----------
 export default {
 	async fetch(req: Request, env: Env): Promise<Response> {
 		const url = new URL(req.url);
 
-		// Ignore favicon noise
 		if (req.method === "GET" && url.pathname === "/favicon.ico") {
 			return new Response(null, { status: 204 });
 		}
 
-		// Guard access
+		
 		let authUser: FirebaseAuthResult;
 		try {
 			authUser = await requireFirebaseAuth(req, env);
 		} catch {
-			return unauthorized(); // 403
+			return unauthorized(); 
 		}
 
-		// Verified UID from token
 		const userId = authUser.uid;
 		const rl = await enforceLimits(env, userId);
 		if (!rl.ok) return json({ error: "Rate limit exceeded", ...rl }, 429);
@@ -453,7 +429,6 @@ export default {
 		}
 		
 		try {
-			// ---- Airports Autocomplete ----
 			if (req.method === "GET" && url.pathname === "/autocomplete/airports") {
 				const q = (url.searchParams.get("q") || "").trim();
 				if (q.length < 2) return json([]);
@@ -467,7 +442,6 @@ export default {
 				return json(result);
 			}
 
-			// ---- Hotels Autocomplete (CITY suggestions) ----
 			if (req.method === "GET" && url.pathname === "/autocomplete/hotels") {
 				const q = (url.searchParams.get("q") || "").trim();
 				if (q.length < 2) return json([]);
@@ -481,7 +455,6 @@ export default {
 				return json(result);
 			}
 
-			// ---- Flights Search ----
 			if (req.method === "POST" && url.pathname === "/search/flights") {
 				const body = (await req.json()) as Record<string, unknown>;
 
@@ -503,7 +476,6 @@ export default {
 				return json(result);
 			}
 
-			// ---- Hotels Search ----
 			if (req.method === "POST" && url.pathname === "/search/hotels") {
 				const body = (await req.json()) as Record<string, unknown>;
 
@@ -516,8 +488,6 @@ export default {
 					return badRequest("Missing required fields: placeId, checkIn, checkOut, rooms");
 				}
 
-				// placeId must be an IATA city code for this implementation
-				// (Your Android should set it only when the user picks a suggestion.)
 				const ck = cacheKey("hotels", body);
 				const cached = await env.SEARCH_KV.get(ck);
 				if (cached) return json(JSON.parse(cached));
@@ -529,7 +499,6 @@ export default {
 
 			return json({ error: "Not found" }, 404);
 		} catch (e: any) {
-			// Don’t leak secrets. Return a safe error message.
 			const status = typeof e?.status === "number" ? e.status : 502;
 			return json(
 				{
